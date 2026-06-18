@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yorichecker"
+version = "0.1.0"
+description = "A CLI tool to check Crunchyroll login credentials"
+readme = "README.md"
+requires-python = ">=3.7"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+keywords = ["crunchyroll", "login", "checker", "cli"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Internet :: WWW/HTTP",
+]
+dependencies = [
+    "playwright>=1.40.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/yorichecker"
+Documentation = "https://github.com/yourusername/yorichecker#readme"
+Issues = "https://github.com/yourusername/yorichecker/issues"
+
+[project.scripts]
+yorichecker = "yorichecker.cli:main"

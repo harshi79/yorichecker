@@ -8,12 +8,12 @@ def read_file(fname):
 setup(
     name="yorichecker",
     version="0.1.0",
-    author="Your Name",
-    author_email="your.email@example.com",
+    author="harshi79",
+    author_email="yori4678@gmail.com",
     description="A CLI tool to check Crunchyroll login credentials",
     long_description=read_file("README.md"),
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/yorichecker",
+    url="https://github.com/harshi79/yorichecker",
     packages=find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3",

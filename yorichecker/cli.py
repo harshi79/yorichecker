@@ -80,8 +80,8 @@ async def login_crunchyroll(email: str, password: str) -> dict:
         try:
             sso_url = "https://sso.crunchyroll.com/login?return_url=%2Fauthorize%3Fclient_id%3Dkmj7imhjt_q90lcbzzsj%26redirect_uri%3Dhttps%253A%252F%252Fwww.crunchyroll.com%252Fcallback%26response_type%3Dcookie%26state%3D"
             logger.info("Navigating to SSO login")
-            await page.goto(sso_url, timeout=60000)
-            await page.wait_for_load_state("networkidle", timeout=30000)
+            await page.goto(sso_url, timeout=30000)
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
 
             logger.info("Checking for Cloudflare")
             if not await bypass_cloudflare(page):
@@ -107,6 +107,9 @@ async def login_crunchyroll(email: str, password: str) -> dict:
                 except:
                     pass
 
+            # Wait for page to stabilize after cookie handling
+            await asyncio.sleep(1)
+
             logger.info("Looking for email field")
             email_field = None
             email_selectors = [
@@ -116,27 +119,103 @@ async def login_crunchyroll(email: str, password: str) -> dict:
                 "input[id='email']",
                 "input[placeholder*='Email']"
             ]
-            for sel in email_selectors:
-                try:
-                    email_field = await page.wait_for_selector(sel, timeout=3000)
-                    if email_field:
-                        logger.info(f"Found email field: {sel}")
-                        break
-                except:
-                    pass
+
+            # Try multiple times with increasing delays
+            for attempt in range(3):
+                for sel in email_selectors:
+                    try:
+                        email_field = await page.wait_for_selector(sel, timeout=2000 * (attempt + 1))
+                        if email_field:
+                            logger.info(f"Found email field: {sel} (attempt {attempt + 1})")
+                            break
+                    except:
+                        continue
+                if email_field:
+                    break
+                if attempt < 2:  # Don't sleep after the last attempt
+                    await asyncio.sleep(1 * (attempt + 1))
+
             if not email_field:
-                inputs = await page.query_selector_all("input[type='text'], input[type='email']")
-                for inp in inputs:
-                    if await inp.is_visible():
-                        email_field = inp
-                        break
+                # Fallback: find any visible email/text input
+                try:
+                    inputs = await page.query_selector_all("input[type='text'], input[type='email']")
+                    for inp in inputs:
+                        if await inp.is_visible():
+                            email_field = inp
+                            logger.info(f"Found email field via fallback: visible input")
+                            break
+                except Exception as e:
+                    logger.warning(f"Error in email field fallback: {e}")
+
             if not email_field:
                 result["message"] = "Email field not found"
+                # Save debug info
+                try:
+                    result["debug_content"] = await page.content()
+                    result["debug_url"] = page.url
+                    result["debug_screenshot"] = await page.screenshot()
+
+                    # Save information about all input elements on the page
+                    all_inputs = await page.query_selector_all("input")
+                    input_info = []
+                    for inp in all_inputs:
+                        try:
+                            input_type = await inp.get_attribute("type")
+                            input_name = await inp.get_attribute("name")
+                            input_id = await inp.get_attribute("id")
+                            input_placeholder = await inp.get_attribute("placeholder")
+                            input_info.append({
+                                "type": input_type,
+                                "name": input_name,
+                                "id": input_id,
+                                "placeholder": input_placeholder
+                            })
+                        except:
+                            pass
+                    result["debug_inputs"] = input_info
+
+                    # Save information about all buttons on the page
+                    all_buttons = await page.query_selector_all("button")
+                    button_info = []
+                    for btn in all_buttons:
+                        try:
+                            button_text = await btn.inner_text()
+                            button_info.append({
+                                "text": button_text.strip()
+                            })
+                        except:
+                            pass
+                    result["debug_buttons"] = button_info
+
+                    # Try to find if there are any iframes that might contain the login form
+                    frames = await page.frames()
+                    frame_info = []
+                    for frame in frames:
+                        try:
+                            frame_url = frame.url
+                            frame_name = frame.name
+                            frame_info.append({
+                                "url": frame_url,
+                                "name": frame_name
+                            })
+                        except:
+                            pass
+                    result["debug_frames"] = frame_info
+
+                except Exception as e:
+                    logger.warning(f"Could not save debug info: {e}")
                 return result
+
+            logger.info(f"Filling email field with: {email}")
             await email_field.fill(email)
             await asyncio.sleep(1)
 
-            logger.info("Looking for password field")
+            # Try pressing Enter on the email field to see if it triggers the next step
+            logger.info("Pressing Enter on email field to proceed to next step")
+            await email_field.press("Enter")
+            await asyncio.sleep(2)  # Wait for any potential page changes
+
+            logger.info("Looking for password field AFTER entering email and pressing Enter")
             password_field = None
             password_selectors = [
                 "input[type='password']",
@@ -144,21 +223,95 @@ async def login_crunchyroll(email: str, password: str) -> dict:
                 "input[id='password']",
                 "input[placeholder*='Password']"
             ]
-            for sel in password_selectors:
+
+            # Try multiple times with increasing delays
+            for attempt in range(5):  # Increased attempts
+                for sel in password_selectors:
+                    try:
+                        password_field = await page.wait_for_selector(sel, timeout=3000 * (attempt + 1))
+                        if password_field:
+                            logger.info(f"Found password field: {sel} (attempt {attempt + 1})")
+                            break
+                    except:
+                        continue
+                if password_field:
+                    break
+                # Wait before retrying, with exponential backoff
+                if attempt < 4:  # Don't sleep after the last attempt
+                    wait_time = 1 * (2 ** attempt)  # 1, 2, 4, 8 seconds
+                    logger.info(f"Password field not found yet, waiting {wait_time}s before retry...")
+                    await asyncio.sleep(wait_time)
+
+            if not password_field:
+                # Fallback: find any password input
                 try:
-                    password_field = await page.wait_for_selector(sel, timeout=3000)
-                    if password_field:
-                        logger.info(f"Found password field: {sel}")
-                        break
-                except:
-                    pass
+                    pw_inputs = await page.query_selector_all("input[type='password']")
+                    if pw_inputs:
+                        password_field = pw_inputs[0]
+                        logger.info(f"Found password field via fallback: {len(pw_inputs)} password inputs found")
+                except Exception as e:
+                    logger.warning(f"Error in password field fallback: {e}")
+
             if not password_field:
-                pw_inputs = await page.query_selector_all("input[type='password']")
-                if pw_inputs:
-                    password_field = pw_inputs[0]
-            if not password_field:
-                result["message"] = "Password field not found"
+                result["message"] = "Password field not found after email submission and Enter key"
+                # Save comprehensive debug info for troubleshooting
+                try:
+                    result["debug_content"] = await page.content()
+                    result["debug_url"] = page.url
+                    result["debug_screenshot"] = await page.screenshot()
+
+                    # Also save information about all input elements on the page
+                    all_inputs = await page.query_selector_all("input")
+                    input_info = []
+                    for inp in all_inputs:
+                        try:
+                            input_type = await inp.get_attribute("type")
+                            input_name = await inp.get_attribute("name")
+                            input_id = await inp.get_attribute("id")
+                            input_placeholder = await inp.get_attribute("placeholder")
+                            input_info.append({
+                                "type": input_type,
+                                "name": input_name,
+                                "id": input_id,
+                                "placeholder": input_placeholder
+                            })
+                        except:
+                            pass
+                    result["debug_inputs"] = input_info
+
+                    # Save information about all buttons on the page
+                    all_buttons = await page.query_selector_all("button")
+                    button_info = []
+                    for btn in all_buttons:
+                        try:
+                            button_text = await btn.inner_text()
+                            button_info.append({
+                                "text": button_text.strip()
+                            })
+                        except:
+                            pass
+                    result["debug_buttons"] = button_info
+
+                    # Try to find if there are any iframes that might contain the password field
+                    frames = await page.frames()
+                    frame_info = []
+                    for frame in frames:
+                        try:
+                            frame_url = frame.url
+                            frame_name = frame.name
+                            frame_info.append({
+                                "url": frame.url,
+                                "name": frame_name
+                            })
+                        except:
+                            pass
+                    result["debug_frames"] = frame_info
+
+                except Exception as e:
+                    logger.warning(f"Could not save debug info: {e}")
                 return result
+
+            logger.info(f"Filling password field")
             await password_field.fill(password)
             await asyncio.sleep(0.5)
 
@@ -319,6 +472,18 @@ def save_results(filename: str, results: list):
             f.write(f"{i}. {masked_email}: {status} - {result['message']}\n")
             if not result["success"]:
                 f.write(f"   Details: {result['message']}\n")
+                # Include debug info if available
+                if "debug_content" in result:
+                    f.write(f"   Debug: Page URL was {result.get('debug_url', 'unknown')}\n")
+                    f.write(f"   Debug: Content length: {len(result['debug_content'])} chars\n")
+                    if "debug_inputs" in result:
+                        f.write(f"   Debug: Found {len(result['debug_inputs'])} input elements on page\n")
+                    if "debug_buttons" in result:
+                        f.write(f"   Debug: Found {len(result['debug_buttons'])} buttons on page:\n")
+                        for i, btn in enumerate(result['debug_buttons']):
+                            f.write(f"    {i+1}. Text: \"{btn.get('text', 'N/A')}\"\n")
+                    if "debug_frames" in result:
+                        f.write(f"   Debug: Found {len(result['debug_frames'])} iframes on page\n")
 
     return result_path
 
@@ -411,6 +576,24 @@ Results are saved to ~/YORICHECKER/RESULTS/ as timestamped text files.
                 f.write(f"Email: {args.target}\n")
                 f.write(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"Result: {formatted}\n")
+                # Include debug info if available
+                if not result["success"] and "debug_inputs" in result:
+                    f.write(f"\nDebug Information:\n")
+                    f.write(f"Page URL was {result.get('debug_url', 'unknown')}\n")
+                    f.write(f"Content length: {len(result.get('debug_content', ''))} chars\n")
+                    f.write(f"Found {len(result['debug_inputs'])} input elements on page:\n")
+                    for i, inp in enumerate(result['debug_inputs']):
+                        f.write(f"  {i+1}. Type: {inp.get('type', 'N/A')}, Name: {inp.get('name', 'N/A')}, "
+                                f"ID: {inp.get('id', 'N/A')}, Placeholder: {inp.get('placeholder', 'N/A')}\n")
+                    if "debug_buttons" in result:
+                        f.write(f"Found {len(result['debug_buttons'])} buttons on page:\n")
+                        for i, btn in enumerate(result['debug_buttons']):
+                            f.write(f"    {i+1}. Text: \"{btn.get('text', 'N/A')}\"\n")
+                    if "debug_frames" in result:
+                        f.write(f"Found {len(result['debug_frames'])} iframes on page:\n")
+                        for i, frame in enumerate(result['debug_frames']):
+                            f.write(f"    {i+1}. URL: {frame.get('url', 'N/A')}, Name: {frame.get('name', 'N/A')}\n")
+
             print(f"[+] Result saved to: {result_filename}")
 
             sys.exit(0 if result["success"] else 1)

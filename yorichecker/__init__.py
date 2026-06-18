@@ -1,1 +1,3 @@
-"""YoriChecker - Crunchyroll login checker package."""
+"""
+Yori Checker - Crunchyroll Account Checker
+"""

@@ -1,33 +1,39 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "yorichecker"
 version = "0.1.0"
-description = "A CLI tool to check Crunchyroll login credentials"
+description = "A CLI tool to check Crunchyroll account credentials"
 readme = "README.md"
 requires-python = ">=3.7"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Yori Checker", email = "yorichecker@example.com"}
 ]
-keywords = ["crunchyroll", "login", "checker", "cli"]
+keywords = ["crunchyroll", "account", "checker", "cli", "automation"]
 classifiers = [
-    "Programming Language :: Python :: 3",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
-    "Intended Audience :: End Users/Desktop",
-    "Topic :: Internet :: WWW/HTTP",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
     "playwright>=1.40.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/yorichecker"
-Documentation = "https://github.com/yourusername/yorichecker#readme"
-Issues = "https://github.com/yourusername/yorichecker/issues"
+Homepage = "https://github.com/harshi79/yorichecker"
+Repository = "https://github.com/harshi79/yorichecker"
+"Bug Tracker" = "https://github.com/harshi79/yorichecker/issues"
 
 [project.scripts]
 yorichecker = "yorichecker.cli:main"
